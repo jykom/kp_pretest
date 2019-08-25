@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding = "UTF-8" ?>
+<!DOCTYPE mapper
+	PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+	"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.kakao.transinfo.mapper.QueryMapper">
+	<select id="getAmtTopCustom" resultType="com.kakao.transinfo.domain.AmtTopCustom">
+		/* 데이터베이스에 있는 연도별 합계금액이 가장 많은 고객을 추출*/
+		SELECT T1.year,											/* 연도 */
+		       T1.name,											/* 계좌명 */
+		       T1.acct_No AS acctNo,							/* 계좌번호 */
+		       Max(sumAmt) AS sumAmt							/* 합계금액 */
+		  FROM
+		       (SELECT substr(ST1.trans_Dt,1,4) AS year,		/* 연도 */
+		               ST2.name,								/* 계좌명 */
+		               ST1.acct_No,								/* 계좌번호 */
+		               sum(ST1.amt-ST1.cmsn) AS sumAmt			/* 합계금액 = 거래금액 - 수수료 */
+		          FROM trans_info ST1,							/* 거래내역 table */
+		               account_info ST2							/* 계좌정보 table */
+		         WHERE ST1.cncl_Yn = "N"						/* 취소여부가 "N"인 유효한 거래만 추출 */
+		           AND ST1.acct_No = ST2.acct_No
+		         GROUP BY substr(ST1.trans_Dt,1,4), ST1.acct_No	/* 계좌번호로 Grouping */
+		         ORDER BY substr(ST1.trans_Dt,1,4), sumAmt DESC	/* 합계급액이 많은 순으로 Sort */
+		       ) T1
+		GROUP BY year
+	</select>
+
+	<select id="getTransNotExistCustom" resultType="com.kakao.transinfo.domain.TransNotExistCustom">
+		/* 2018년 또는 2019년에 거래가 없는 고객을 추출 */
+		SELECT '2018' AS year,										/* 연도 */
+		       T1.name,												/* 계좌명 */
+		       T1.acct_No AS acctNo									/* 계좌번호 */
+		  FROM account_info T1										/* 계좌정보 table */
+		 WHERE
+		       NOT EXISTS (SELECT 1 								/* 거래가 없는 고객을 추출 */
+		                     FROM trans_info ST1					/* 거래내역 table */
+		                    WHERE cncl_Yn != "Y"					/* 전제: 취소된 거래는 거래로 간주하지 않는다. 취소여부가 "Y"가 아닌(!=) 것 - "Y" 아닌 다른 플래그 존재가능성 고려 */
+		                      AND T1.acct_No = ST1.acct_no
+		                      AND substr(ST1.trans_Dt,1,4) = '2018'
+		                   ORDER BY acct_no
+		       )
+
+		UNION
+
+		SELECT '2019' AS year,										/* 연도 */
+		       T1.name,												/* 계좌명 */
+		       T1.acct_No AS acctNo									/* 계좌번호 */
+		  FROM account_info T1										/* 계좌정보 table */
+		 WHERE
+		       NOT EXISTS (SELECT 1 								/* 거래가 없는 고객을 추출 */
+		                     FROM trans_info ST1					/* 거래내역 table */
+		                    WHERE cncl_Yn != "Y"					/* 전제: 취소된 거래는 거래로 간주하지 않는다. 취소여부가 "Y"가 아닌(!=) 것 - "Y" 아닌 다른 플래그 존재가능성 고려 */
+		                      AND T1.acct_No = ST1.acct_no
+		                      AND substr(ST1.trans_Dt,1,4) = '2019'
+						   ORDER BY acct_no
+		       )
+	</select>
+
+	<select id="getAmtTopBranch" resultType="com.kakao.transinfo.domain.AmtTopBranch">
+		/* 연도별 합계금액이 큰 관리점 순서로 추출*/
+		SELECT substr(T1.trans_Dt,1,4) AS year, 		/* 연도 */
+	           T3.br_Name AS brName, 					/* 관리점명 */
+	           T3.br_Code AS brCode, 					/* 관리점코드 */
+	           sum(T1.amt) AS sumAmt 					/* 합계급액 */
+	      FROM trans_info T1,							/* 거래내역 table */
+	           account_info T2,							/* 계좌정보 table */
+	           branch_info T3 							/* 관리점정보 table */
+	     WHERE T1.cncl_Yn = "N"							/* 취소여부가 "N"인 유효한 거래만 추출 */
+	       AND T1.acct_No = T2.acct_No
+	       AND T2.br_Code = T3.br_Code
+	    GROUP BY substr(T1.trans_Dt,1,4), T3.br_Code	/* 연도별, 관리점별 거래금액의 합계를 구하기 위한 grouping */
+	    ORDER BY year, sumAmt DESC						/* 합계금액이 큰 순서로 sort */
+	</select>
+
+	<select id="getBranchSumAmt" resultType="com.kakao.transinfo.domain.BranchSumAmt">
+		SELECT T3.br_Name AS brName,		/* 관리점명 */
+		       T3.br_Code AS brCode,		/* 관리점코드 */
+		       SUM(T1.amt) AS sumAmt		/* 거래금액 합계 */
+		  FROM trans_info T1,				/* 거래내역 table */
+		       (SELECT ST1.acct_No, 		/* 계좌번호 */
+		               CASE ST1.br_Code
+		                  WHEN "B" THEN "A"	/* 통폐합된 판교점의 거래금액 합계를 출력하기 위해 계좌관리 테이블 내 "분당점"의 brCode를 "판교점"의 brCode로 치환한다. 판교점의 거래금액 합계 = 분당점의 거래금액합계 + 기존 판교점의 거래금액합계*/
+		                  ELSE ST1.br_Code	/* "분당점"이 아닌 다른 관리점코드는 그대로 사용 */
+		               END AS br_Code		/* 관리점코드 */
+		       FROM account_info ST1		/* 계좌정보 table */
+		       ) T2,
+		       branch_info T3				/* 관리점정보 table */
+		 WHERE T1.cncl_Yn = "N"				/* 취소여부가 "N"인 유효한 거래만 추출 */
+		   AND T1.acct_No = T2.acct_No
+		   AND T2.br_Code = T3.br_Code
+		   AND T3.br_Name = #{brName}		/* 관리점명을 INPUT PARAM으로 받는다. */
+		GROUP BY T3.br_Code					/* 관리지점별 거래금액의 합계를 구하기 위한 관리점코드로 Grouping */
+	</select>
+</mapper>
